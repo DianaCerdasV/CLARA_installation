@@ -29,6 +29,10 @@ fi
 # 2) Florence-2 (downloaded once into the Hugging Face cache, no login needed)
 # ---------------------------------------------------------------------------
 echo ">>> Downloading microsoft/Florence-2-base..."
+# A PYTHONPATH pointing at /usr/lib/python3/dist-packages makes conda load
+# the system's old Python packages and crash. Conda envs never need it.
+unset PYTHONPATH
+
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate qwen3
 python -c "from huggingface_hub import snapshot_download; print(snapshot_download('microsoft/Florence-2-base'))"

@@ -25,6 +25,10 @@ if [ ! -f "$CLARA_DIR/start_pillar_chatbot.sh" ] || [ ! -d "$CLARA_DIR/qwen3_api
     exit 1
 fi
 
+# A PYTHONPATH pointing at /usr/lib/python3/dist-packages makes conda load
+# the system's old Python packages and crash. Conda envs never need it.
+unset PYTHONPATH
+
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
 create_env() {

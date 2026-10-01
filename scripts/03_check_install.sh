@@ -39,6 +39,10 @@ for f in sam2.1_hiera_base_plus.pt big-lama/config.yaml big-lama/best.ckpt big-l
 done
 
 echo "Conda environments"
+# A PYTHONPATH pointing at /usr/lib/python3/dist-packages makes conda load
+# the system's old Python packages and crash. Conda envs never need it.
+unset PYTHONPATH
+
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
 if conda activate qwen3 2>/dev/null; then
