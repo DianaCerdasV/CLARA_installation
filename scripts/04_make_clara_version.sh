@@ -56,6 +56,12 @@ echo ">>> Adding the CLARA clarification files..."
 for f in $FILES; do
     cp "$OVERLAY/$f" "$DST/$f"
 done
+# Keep the Ollama address of the original folder (e.g. a remote server set
+# with use_remote_ollama.sh).
+HOST_LINE="$(grep -m1 '^client = Client(host=' "$SRC/qwen3_api/ai_engine.py" || true)"
+if [ -n "$HOST_LINE" ]; then
+    sed -i "s#^client = Client(host=.*#$HOST_LINE#" "$DST/qwen3_api/ai_engine.py"
+fi
 
 echo
 echo "Done. You now have two versions:"

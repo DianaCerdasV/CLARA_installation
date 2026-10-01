@@ -21,11 +21,16 @@ else
 fi
 
 echo "Ollama"
-if command -v ollama >/dev/null 2>&1; then
-    ok "ollama $(ollama --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-    if ollama list 2>/dev/null | grep -q "qwen3-vl:8b"; then ok "qwen3-vl:8b model"; else bad "qwen3-vl:8b model (run: ollama pull qwen3-vl:8b)"; fi
+OLLAMA_URL="$(grep -oE '^client = Client\(host="[^"]+"' "$CLARA_DIR/qwen3_api/ai_engine.py" | sed -E 's/.*host="([^"]+)"/\1/')"
+OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
+if TAGS="$(curl -s --max-time 10 "$OLLAMA_URL/api/tags")"; then
+    ok "Ollama answers at $OLLAMA_URL"
+    if echo "$TAGS" | grep -q '"qwen3-vl:8b"'; then ok "qwen3-vl:8b model"; else bad "qwen3-vl:8b model (run on the Ollama machine: ollama pull qwen3-vl:8b)"; fi
 else
-    bad "ollama (run: curl -fsSL https://ollama.com/install.sh | sh)"
+    case "$OLLAMA_URL" in
+        *127.0.0.1*) bad "Ollama at $OLLAMA_URL (install it: curl -fsSL https://ollama.com/install.sh | sh, or start it: ollama serve)" ;;
+        *) bad "Ollama server at $OLLAMA_URL does not answer (is it on, and listening on 0.0.0.0?)" ;;
+    esac
 fi
 
 echo "Model files"

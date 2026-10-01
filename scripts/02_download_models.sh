@@ -16,13 +16,14 @@ PM="$CLARA_DIR/Inpaint-Anything/pretrained_models"
 # ---------------------------------------------------------------------------
 # 1) Qwen3-VL through Ollama
 # ---------------------------------------------------------------------------
-if ! command -v ollama >/dev/null 2>&1; then
-    echo "ERROR: Ollama is not installed. Install it first:"
-    echo "  curl -fsSL https://ollama.com/install.sh | sh"
-    exit 1
+if command -v ollama >/dev/null 2>&1; then
+    echo ">>> Downloading qwen3-vl:8b (about 6 GB)..."
+    ollama pull qwen3-vl:8b
+else
+    echo ">>> Ollama is not installed on this PC: skipping qwen3-vl:8b."
+    echo "    Fine if you use Ollama on another server (see use_remote_ollama.sh)."
+    echo "    Otherwise install it first: curl -fsSL https://ollama.com/install.sh | sh"
 fi
-echo ">>> Downloading qwen3-vl:8b (about 6 GB)..."
-ollama pull qwen3-vl:8b
 
 # ---------------------------------------------------------------------------
 # 2) Florence-2 (downloaded once into the Hugging Face cache, no login needed)

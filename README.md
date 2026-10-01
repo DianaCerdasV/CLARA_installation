@@ -110,6 +110,38 @@ On normal Ubuntu, Ollama starts automatically in the background. If a later
 step says it can't connect to Ollama, open a **new terminal**, run
 `ollama serve`, and leave that terminal open.
 
+### Option: Ollama on another server instead of this PC
+
+If you already have Ollama on a lab or local server, you can use it instead.
+Qwen will then run on the server's GPU.
+
+1. On the **server**: download the model. It must be the vision model
+   `qwen3-vl:8b`; the plain `qwen3` can't see images.
+   ```bash
+   ollama pull qwen3-vl:8b
+   ```
+2. On the **server**: let Ollama accept connections from other machines (by default it only
+   listens to itself). Run `sudo systemctl edit ollama`, add these two lines, save, then
+   run `sudo systemctl restart ollama`:
+   ```
+   [Service]
+   Environment="OLLAMA_HOST=0.0.0.0:11434"
+   ```
+   Port **11434** must also be open in the server's firewall.
+3. On **your PC**: skip installing Ollama, and point CLARA to the server (replace the IP):
+   ```bash
+   bash ~/clara_installation/scripts/use_remote_ollama.sh ~/multimodal-chatbot 192.168.1.50
+   ```
+   It checks the server answers and has `qwen3-vl:8b`, then changes the one line in
+   `qwen3_api/ai_engine.py` that holds the Ollama address.
+   To go back to a local Ollama: `... use_remote_ollama.sh ~/multimodal-chatbot local`.
+
+Keep in mind:
+- Your PC **still needs its NVIDIA GPU**. Florence-2, SAM 2.1 and LaMa always run
+  locally, only Qwen moves to the server (that frees about 6 GB on your GPU).
+- Your images are sent to the server, so use a server you trust (your lab / local network).
+- Step 5 will say "skipping qwen3-vl:8b". That's expected, and the other models still download.
+
 ## Step 5 — Download the models (≈ 10 GB)
 
 ```bash
@@ -216,6 +248,7 @@ Good to know:
 - The changed files are in `clara_version/` in this repo
   (`qwen3_api/ai_engine.py` and `core/src/multimodal_chatbot_ui.py`), if you want
   to read or tweak them.
+- If you set a remote Ollama server, the copy uses the same server automatically.
 - To rebuild the copy (e.g. after changing those files):
   `rm -rf ~/multimodal-chatbot-clara` and run the script again.
 
@@ -226,7 +259,7 @@ Good to know:
 | Message | What to do |
 |---|---|
 | `conda: command not found` | Close and reopen the terminal, or run `source ~/miniconda3/etc/profile.d/conda.sh`. |
-| `Could not connect to ollama` / `Connection refused ... 11434` | Run `ollama serve` in a separate terminal and leave it open. |
+| `Could not connect to ollama` / `Connection refused ... 11434` | Local Ollama: run `ollama serve` in a separate terminal and leave it open. Remote server: check it's on, listens on `0.0.0.0`, and port 11434 is open. |
 | `model "qwen3-vl:8b" not found` | `ollama pull qwen3-vl:8b` |
 | Ollama says the model needs a newer version | Re-run the Ollama install command from Step 4 to update it. |
 | `CUDA out of memory` | Close other programs that use the GPU (games, other notebooks). Check with `nvidia-smi`. |
