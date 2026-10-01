@@ -260,6 +260,7 @@ Good to know:
 |---|---|
 | `cannot import name 'Sentinel' from 'typing_extensions' (/usr/lib/python3/dist-packages/...)` | Your `PYTHONPATH` points conda at the system's Python packages. Run `unset PYTHONPATH`, then delete the `export PYTHONPATH=...` line from `~/.bashrc` and open a new terminal. Check with `echo $PYTHONPATH` (it should print an empty line). |
 | `CondaToSNonInteractiveError: Terms of Service have not been accepted` | Accept them once: `conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main` and the same with `.../pkgs/r`. Then re-run the script. |
+| `Weights only load failed ... pytorch_lightning ... ModelCheckpoint` (when moving/removing objects) | PyTorch 2.6+ blocks the LaMa checkpoint. Run `sed -i 's/torch.load(path, map_location=map_location)$/torch.load(path, map_location=map_location, weights_only=False)/' ~/multimodal-chatbot/Inpaint-Anything/lama/saicinpainting/training/trainers/__init__.py` (and the same in `~/multimodal-chatbot-clara` if it is a separate copy), then restart CLARA. Step 1 now does this for you. |
 | `conda: command not found` | Close and reopen the terminal, or run `source ~/miniconda3/etc/profile.d/conda.sh`. |
 | `Could not connect to ollama` / `Connection refused ... 11434` | Local Ollama: run `ollama serve` in a separate terminal and leave it open. Remote server: check it's on, listens on `0.0.0.0`, and port 11434 is open. |
 | `model "qwen3-vl:8b" not found` | `ollama pull qwen3-vl:8b` |

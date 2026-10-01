@@ -78,6 +78,12 @@ python -m pip install \
 SAM2_BUILD_CUDA=0 python -m pip install --no-build-isolation "$CLARA_DIR/Inpaint-Anything/sam2"
 conda deactivate
 
+# PyTorch 2.6+ (needed for RTX 50xx) refuses to open the big-lama checkpoint
+# unless torch.load is told weights_only=False. The file comes from the official
+# LaMa release, so allow it. Older PyTorch accepts this argument too.
+LAMA_LOADER="$CLARA_DIR/Inpaint-Anything/lama/saicinpainting/training/trainers/__init__.py"
+sed -i 's/torch.load(path, map_location=map_location)$/torch.load(path, map_location=map_location, weights_only=False)/' "$LAMA_LOADER"
+
 echo
 echo "Done. Both environments are ready: qwen3, inpaint-anything"
 echo "Next: bash 02_download_models.sh $CLARA_DIR"
