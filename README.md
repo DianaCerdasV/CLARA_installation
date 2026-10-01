@@ -1,0 +1,210 @@
+# Installing CLARA with Qwen3 (no Llama needed)
+
+A step-by-step guide to installing the **Qwen3 version of CLARA**
+([aipapadim/multimodal-chatbot](https://github.com/aipapadim/multimodal-chatbot)).
+It's written for people who are new to coding.
+
+## First, the most important point
+
+The Qwen3 version **does not use Llama 3.2 at all**. Llama was only needed
+by the *old* CLARA repo. The Meta restriction for the EU doesn't affect you here.
+
+| Repository | What it is | Do you need it? |
+|---|---|---|
+| [aipapadim/CLARA](https://github.com/aipapadim/CLARA) | Old version (Llama 3.2 + Grounding DINO + Stable Diffusion) | **No** |
+| [aipapadim/llama3.2-api](https://github.com/aipapadim/llama3.2-api) | The Llama dialogue server for the old version | **No** |
+| [aipapadim/multimodal-chatbot](https://github.com/aipapadim/multimodal-chatbot) | **New version with Qwen3-VL** | **Yes, only this one** |
+
+The new version uses only models that are open in the EU:
+
+| Model | Job | License |
+|---|---|---|
+| **Qwen3-VL 8B** (via Ollama) | The "brain": understands your message and the image | Apache 2.0 |
+| **Florence-2-base** | Finds where objects are in the image (boxes) | MIT |
+| **SAM 2.1** | Cuts the object out precisely | Apache 2.0 |
+| **LaMa (big-lama)** | Fills the empty space after removing/moving an object | Apache 2.0 |
+
+### How the pieces talk to each other
+
+```
+ You (browser) ──► Gradio UI  :7861   (conda env: qwen3)
+                      │
+                      ├──► Qwen3 API :5555  (conda env: qwen3)
+                      │        ├── Ollama :11434 ── qwen3-vl:8b
+                      │        └── Florence-2 (finds object boxes)
+                      │
+                      └──► Inpaint API :4444 (conda env: inpaint-anything)
+                               ├── SAM 2.1 (cuts the object)
+                               └── LaMa    (fills the hole)
+```
+
+> **About the conda environments you already made:** the old repo used the names
+> `clara-llama`, `clara-grounding`, `clara-inpaint`, `clara-diffusion`.
+> The new start script looks for **different names**: `qwen3` and
+> `inpaint-anything`. Step 3 creates these two for you. You can leave the old
+> ones alone, or delete them later to save disk space
+> (`conda env remove -n clara-llama`, etc.).
+
+---
+
+## What you need
+
+- **Linux** (Ubuntu works well). On **Windows**, install
+  [WSL2 with Ubuntu](https://learn.microsoft.com/windows/wsl/install) and
+  do everything inside the Ubuntu terminal.
+- An **NVIDIA GPU** with at least ~12 GB of memory. The code is written for
+  `cuda:0` and won't run on CPU only.
+- **About 25 GB** of free disk space.
+- **Miniconda/Anaconda**, which you already have.
+
+Run these commands in a terminal, one block at a time. Lines starting
+with `#` are comments; you don't need to type them.
+
+---
+
+## Step 1 — Basic tools
+
+```bash
+sudo apt update
+sudo apt install -y git wget unzip lsof
+nvidia-smi        # should show your GPU. If it errors, install the NVIDIA driver first.
+```
+
+## Step 2 — Download the code
+
+```bash
+cd ~
+git clone https://github.com/aipapadim/multimodal-chatbot.git
+git clone https://github.com/dianacerdasv/clara_installation.git
+```
+
+You now have two folders in your home directory:
+`~/multimodal-chatbot` (CLARA itself) and `~/clara_installation` (this guide and its helper scripts).
+
+## Step 3 — Create the two conda environments (≈ 15–30 min)
+
+```bash
+bash ~/clara_installation/scripts/01_create_envs.sh ~/multimodal-chatbot
+```
+
+This creates:
+- `qwen3`: the Qwen3 API and the chat web page
+- `inpaint-anything`: SAM 2.1 + LaMa
+
+> If you have a new **RTX 50xx** card, run this instead:
+> ```bash
+> TORCH_SPEC="torch==2.7.1 torchvision==0.22.1" TORCH_INDEX=https://download.pytorch.org/whl/cu128 \
+>   bash ~/clara_installation/scripts/01_create_envs.sh ~/multimodal-chatbot
+> ```
+
+## Step 4 — Install Ollama (this replaces Llama)
+
+Ollama is a small program that runs the Qwen3 model on your GPU.
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama --version     # must be 0.12.7 or newer (needed for qwen3-vl)
+```
+
+On normal Ubuntu, Ollama starts automatically in the background. If a later
+step says it can't connect to Ollama, open a **new terminal**, run
+`ollama serve`, and leave that terminal open.
+
+## Step 5 — Download the models (≈ 10 GB)
+
+```bash
+bash ~/clara_installation/scripts/02_download_models.sh ~/multimodal-chatbot
+```
+
+This downloads:
+1. `qwen3-vl:8b` with Ollama (no account or approval needed)
+2. `Florence-2-base` from Hugging Face (no login needed)
+3. `sam2.1_hiera_base_plus.pt` and `sam2.1_hiera_large.pt`
+4. `big-lama` and places it where the code expects it:
+   ```
+   multimodal-chatbot/Inpaint-Anything/pretrained_models/
+     sam2.1_hiera_base_plus.pt
+     sam2.1_hiera_large.pt
+     big-lama/config.yaml
+     big-lama/best.ckpt
+     big-lama/models/best.ckpt
+   ```
+
+> If the big-lama download fails, download the `big-lama` folder manually from
+> [this Google Drive link](https://drive.google.com/drive/folders/1B2x7eQDgecTL0oh3LSIBDGj0fTxs6Ips).
+> Put `config.yaml` in `big-lama/` and `best.ckpt` in **both** `big-lama/` and `big-lama/models/`.
+
+## Step 6 — Check everything
+
+```bash
+bash ~/clara_installation/scripts/03_check_install.sh ~/multimodal-chatbot
+```
+
+Every line should say `[OK]`. If any line says `[MISSING]`, the message
+tells you which step to repeat.
+
+## Step 7 — Start CLARA
+
+```bash
+cd ~/multimodal-chatbot
+bash start_pillar_chatbot.sh
+```
+
+Wait about 1–2 minutes the first time (the models load into the GPU). Then open
+**http://127.0.0.1:7861** in your browser.
+
+How to use it:
+- Upload an image of a scene.
+- **Remove** an object: *"remove the red cup"*
+- **Move** an object: *"move the apple to the right of the bowl"*
+- Anything else is normal chat about the image: *"what objects are on the table?"*
+
+To stop CLARA, press `Ctrl + C` in the terminal.
+
+> Note: the UI starts with `share=True`, which also creates a temporary public
+> `gradio.live` link. If you don't want that, open
+> `multimodal-chatbot/core/src/multimodal_chatbot_ui.py` and change
+> `share=True` to `share=False`.
+
+---
+
+## Common problems
+
+| Message | What to do |
+|---|---|
+| `conda: command not found` | Close and reopen the terminal, or run `source ~/miniconda3/etc/profile.d/conda.sh`. |
+| `Could not connect to ollama` / `Connection refused ... 11434` | Run `ollama serve` in a separate terminal and leave it open. |
+| `model "qwen3-vl:8b" not found` | `ollama pull qwen3-vl:8b` |
+| Ollama says the model needs a newer version | Re-run the Ollama install command from Step 4 to update it. |
+| `CUDA out of memory` | Close other programs that use the GPU (games, other notebooks). Check with `nvidia-smi`. |
+| `torch.cuda.is_available()` is `False` | Your NVIDIA driver is too old for the PyTorch build. Update the driver, or see the RTX 50xx note in Step 3. |
+| `No such file or directory: ... pretrained_models/...` | A model file is missing. Re-run Step 5, then Step 6. |
+| `You're likely running Python from the parent directory of the sam2 repository` | SAM2 was installed with `pip install -e`. Fix it with: `conda activate inpaint-anything && pip uninstall -y SAM-2 && SAM2_BUILD_CUDA=0 pip install --no-build-isolation ~/multimodal-chatbot/Inpaint-Anything/sam2` |
+| `No module named 'pkg_resources'` | `conda activate inpaint-anything && pip install "setuptools<81"` |
+| Port already in use (4444 / 5555 / 7861) | The start script normally clears these. If not, reboot or run `lsof -i :5555` to find the process. |
+
+### Running each part by hand (for debugging)
+
+If something fails, start each server in its own terminal to see the error clearly:
+
+```bash
+# Terminal 1 – Qwen3 API
+conda activate qwen3 && cd ~/multimodal-chatbot/qwen3_api && python app.py
+
+# Terminal 2 – Inpaint API
+conda activate inpaint-anything && cd ~/multimodal-chatbot/Inpaint-Anything && python app.py
+
+# Terminal 3 – Web UI
+conda activate qwen3 && cd ~/multimodal-chatbot/core/src && python multimodal_chatbot_ui.py
+```
+
+---
+
+### What was tested
+
+Both environments were installed from these exact commands and checked on a
+CPU-only Linux machine with Python 3.12. All of CLARA's modules imported
+correctly, and each server stopped only where it needed the model files or
+the GPU. It hasn't been run end-to-end on a GPU yet, so if a step fails on
+your PC, the error message plus the "Common problems" table above is the
+place to start.
