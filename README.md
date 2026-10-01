@@ -11,7 +11,7 @@ by the *old* CLARA repo. The Meta restriction for the EU doesn't affect you here
 
 | Repository | What it is | Do you need it? |
 |---|---|---|
-| [aipapadim/CLARA](https://github.com/aipapadim/CLARA) | Old version (Llama 3.2 + Grounding DINO + Stable Diffusion) | **No** |
+| [aipapadim/CLARA](https://github.com/aipapadim/CLARA) | Old version (Llama 3.2 + Grounding DINO + Stable Diffusion) | No install needed. Its clarification prompt is reused in Step 8 |
 | [aipapadim/llama3.2-api](https://github.com/aipapadim/llama3.2-api) | The Llama dialogue server for the old version | **No** |
 | [aipapadim/multimodal-chatbot](https://github.com/aipapadim/multimodal-chatbot) | **New version with Qwen3-VL** | **Yes, only this one** |
 
@@ -168,6 +168,59 @@ To stop CLARA, press `Ctrl + C` in the terminal.
 
 ---
 
+## Step 8 (optional) — The second version: CLARA with clarification questions
+
+The authors' Qwen3 interface (Step 7) doesn't ask clarification questions.
+It looks for keywords ("remove", "move", "put"...) and does one edit at a time.
+Other messages go to Qwen without CLARA's prompt and without the earlier
+conversation.
+
+This repo can build a **second copy** that restores the CLARA behaviour, using
+the purpose-clarification prompt from the original
+[CLARA repo](https://github.com/aipapadim/CLARA):
+
+```bash
+bash ~/clara_installation/scripts/04_make_clara_version.sh ~/multimodal-chatbot
+```
+
+This creates `~/multimodal-chatbot-clara`. Your first folder is not changed,
+and both versions share the same conda environments and model files, so the
+copy takes only a few MB.
+
+| | `~/multimodal-chatbot` | `~/multimodal-chatbot-clara` |
+|---|---|---|
+| How it reacts | Keywords → one remove / move | CLARA dialogue: asks questions, one at a time |
+| System prompt | Not sent to Qwen | CLARA prompt (editable under **Additional Inputs**) |
+| Remembers the conversation | No | Yes: all messages and images |
+| Final result | One edited image per command | When Qwen is sure, it outputs `image-gen, result = {"container": ["object", ...]}` and each object is moved into its container |
+| Temperature / Top-P / Tokens sliders | Ignored | Used |
+
+Start it the same way:
+
+```bash
+cd ~/multimodal-chatbot-clara
+bash start_pillar_chatbot.sh
+```
+
+Then open **http://127.0.0.1:7861**, upload a scene and write the goal,
+for example *"organize the objects"*. Answer the questions until it
+generates the new image.
+
+Good to know:
+- **Only one version can run at a time** (they use the same ports). Starting
+  one automatically stops the other.
+- The final step reuses the authors' "move" function: each object is cut out
+  and pasted on the **center** of its container, then the next one, on the same
+  image. Florence-2 finds **one** box per name, so with three identical cups only
+  one is moved. Objects it can't find are listed as "skipped" in the reply.
+- The changed files are in `clara_version/` in this repo
+  (`qwen3_api/ai_engine.py` and `core/src/multimodal_chatbot_ui.py`), if you want
+  to read or tweak them.
+- To rebuild the copy (e.g. after changing those files):
+  `rm -rf ~/multimodal-chatbot-clara` and run the script again.
+
+---
+
 ## Common problems
 
 | Message | What to do |
@@ -205,6 +258,10 @@ conda activate qwen3 && cd ~/multimodal-chatbot/core/src && python multimodal_ch
 Both environments were installed from these exact commands and checked on a
 CPU-only Linux machine with Python 3.12. All of CLARA's modules imported
 correctly, and each server stopped only where it needed the model files or
-the GPU. It hasn't been run end-to-end on a GPU yet, so if a step fails on
+the GPU. The CLARA version (Step 8) was also tested in a browser with fake
+model servers standing in for Qwen, Florence-2 and the inpainting service:
+a 3-turn dialogue with history, the image-gen → moves step, and the next turn
+using the new image all worked. Neither version has been run end-to-end on a
+real GPU with the real models yet, so if a step fails on
 your PC, the error message plus the "Common problems" table above is the
 place to start.
