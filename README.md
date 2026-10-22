@@ -270,6 +270,7 @@ Good to know:
 | `No such file or directory: ... pretrained_models/...` | A model file is missing. Re-run Step 5, then Step 6. |
 | `You're likely running Python from the parent directory of the sam2 repository` | SAM2 was installed with `pip install -e`. Fix it with: `conda activate inpaint-anything && pip uninstall -y SAM-2 && SAM2_BUILD_CUDA=0 pip install --no-build-isolation ~/multimodal-chatbot/Inpaint-Anything/sam2` |
 | `No module named 'pkg_resources'` | `conda activate inpaint-anything && pip install "setuptools<81"` |
+| `CUDA out of memory` in the Inpaint API on an 8 GB GPU (Ollama process uses ~5.5 GB) | Ollama keeps Qwen in GPU memory, so SAM/LaMa have no room. Make Ollama unload it after each answer: `sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\nEnvironment="OLLAMA_KEEP_ALIVE=0"\n' \| sudo tee /etc/systemd/system/ollama.service.d/keepalive.conf && sudo systemctl daemon-reload && sudo systemctl restart ollama`. Each Qwen answer then takes a few seconds longer. |
 | Port already in use (4444 / 5555 / 7861) | The start script normally clears these. If not, reboot or run `lsof -i :5555` to find the process. |
 
 ### Running each part by hand (for debugging)
