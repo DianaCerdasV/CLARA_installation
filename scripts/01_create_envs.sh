@@ -25,6 +25,10 @@ if [ ! -f "$CLARA_DIR/start_pillar_chatbot.sh" ] || [ ! -d "$CLARA_DIR/qwen3_api
     exit 1
 fi
 
+# A PYTHONPATH pointing at /usr/lib/python3/dist-packages makes conda load
+# the system's old Python packages and crash. Conda envs never need it.
+unset PYTHONPATH
+
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
 create_env() {
@@ -73,6 +77,12 @@ python -m pip install \
 # SAM2_BUILD_CUDA=0 skips an optional CUDA extension that often fails to compile.
 SAM2_BUILD_CUDA=0 python -m pip install --no-build-isolation "$CLARA_DIR/Inpaint-Anything/sam2"
 conda deactivate
+
+# PyTorch 2.6+ (needed for RTX 50xx) refuses to open the big-lama checkpoint
+# unless torch.load is told weights_only=False. The file comes from the official
+# LaMa release, so allow it. Older PyTorch accepts this argument too.
+LAMA_LOADER="$CLARA_DIR/Inpaint-Anything/lama/saicinpainting/training/trainers/__init__.py"
+sed -i 's/torch.load(path, map_location=map_location)$/torch.load(path, map_location=map_location, weights_only=False)/' "$LAMA_LOADER"
 
 echo
 echo "Done. Both environments are ready: qwen3, inpaint-anything"

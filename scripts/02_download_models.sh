@@ -29,7 +29,17 @@ fi
 # 2) Florence-2 (downloaded once into the Hugging Face cache, no login needed)
 # ---------------------------------------------------------------------------
 echo ">>> Downloading microsoft/Florence-2-base..."
+# A PYTHONPATH pointing at /usr/lib/python3/dist-packages makes conda load
+# the system's old Python packages and crash. Conda envs never need it.
+unset PYTHONPATH
+
 source "$(conda info --base)/etc/profile.d/conda.sh"
+if ! conda env list | awk '{print $1}' | grep -qx qwen3; then
+    echo "ERROR: the conda environment 'qwen3' does not exist yet."
+    echo "Run step 1 first:  bash 01_create_envs.sh $CLARA_DIR"
+    echo "(Ollama models already downloaded are kept, so re-running this is quick.)"
+    exit 1
+fi
 conda activate qwen3
 python -c "from huggingface_hub import snapshot_download; print(snapshot_download('microsoft/Florence-2-base'))"
 conda deactivate

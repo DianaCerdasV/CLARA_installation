@@ -258,6 +258,9 @@ Good to know:
 
 | Message | What to do |
 |---|---|
+| `cannot import name 'Sentinel' from 'typing_extensions' (/usr/lib/python3/dist-packages/...)` | Your `PYTHONPATH` points conda at the system's Python packages. Run `unset PYTHONPATH`, then delete the `export PYTHONPATH=...` line from `~/.bashrc` and open a new terminal. Check with `echo $PYTHONPATH` (it should print an empty line). |
+| `CondaToSNonInteractiveError: Terms of Service have not been accepted` | Accept them once: `conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main` and the same with `.../pkgs/r`. Then re-run the script. |
+| `Weights only load failed ... pytorch_lightning ... ModelCheckpoint` (when moving/removing objects) | PyTorch 2.6+ blocks the LaMa checkpoint. Run `sed -i 's/torch.load(path, map_location=map_location)$/torch.load(path, map_location=map_location, weights_only=False)/' ~/multimodal-chatbot/Inpaint-Anything/lama/saicinpainting/training/trainers/__init__.py` (and the same in `~/multimodal-chatbot-clara` if it is a separate copy), then restart CLARA. Step 1 now does this for you. |
 | `conda: command not found` | Close and reopen the terminal, or run `source ~/miniconda3/etc/profile.d/conda.sh`. |
 | `Could not connect to ollama` / `Connection refused ... 11434` | Local Ollama: run `ollama serve` in a separate terminal and leave it open. Remote server: check it's on, listens on `0.0.0.0`, and port 11434 is open. |
 | `model "qwen3-vl:8b" not found` | `ollama pull qwen3-vl:8b` |
@@ -267,6 +270,7 @@ Good to know:
 | `No such file or directory: ... pretrained_models/...` | A model file is missing. Re-run Step 5, then Step 6. |
 | `You're likely running Python from the parent directory of the sam2 repository` | SAM2 was installed with `pip install -e`. Fix it with: `conda activate inpaint-anything && pip uninstall -y SAM-2 && SAM2_BUILD_CUDA=0 pip install --no-build-isolation ~/multimodal-chatbot/Inpaint-Anything/sam2` |
 | `No module named 'pkg_resources'` | `conda activate inpaint-anything && pip install "setuptools<81"` |
+| `CUDA out of memory` in the Inpaint API on an 8 GB GPU (Ollama process uses ~5.5 GB) | Ollama keeps Qwen in GPU memory, so SAM/LaMa have no room. Make Ollama unload it after each answer: `sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\nEnvironment="OLLAMA_KEEP_ALIVE=0"\n' \| sudo tee /etc/systemd/system/ollama.service.d/keepalive.conf && sudo systemctl daemon-reload && sudo systemctl restart ollama`. Each Qwen answer then takes a few seconds longer. |
 | Port already in use (4444 / 5555 / 7861) | The start script normally clears these. If not, reboot or run `lsof -i :5555` to find the process. |
 
 ### Running each part by hand (for debugging)

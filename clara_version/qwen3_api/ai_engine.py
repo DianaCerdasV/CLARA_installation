@@ -137,7 +137,7 @@ def clarify(payload):
         },
     )
     reply = response.message.content or ""
-    reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
+    reply = strip_thinking(reply)
     print(f"CLARA reply: {reply}")
     return {"response": reply}
 
@@ -176,7 +176,7 @@ def generate(payload):
               options={"num_ctx": 4096}
              )
 
-            target_object = response.message.content.strip()
+            target_object = strip_thinking(response.message.content)
             print(f"Qwen identified target: {target_object}")
 
             precise_bbox = get_florence_bbox(raw_img, target_object)
@@ -207,19 +207,30 @@ def generate(payload):
                 options={"num_ctx": 4096}
             )
 
-            reply_text = response.message.content.strip()
-            
-            
-            reply_text = reply_text.replace("```json", "").replace("```", "").strip()
-            
-            try:
-                move_data = json.loads(reply_text)
-                src_obj = move_data.get("source", "")
-                dst_obj = move_data.get("destination", "")
-                position = move_data.get("position", "center") 
-            except json.JSONDecodeError:
+            reply_text = response.message.content or ""
+            move_data = parse_json_reply(reply_text)
+
+            if not move_data:
+                # Ask again, this time forcing Ollama to return pure JSON.
+                print(f"Qwen didn't return valid JSON, retrying. Raw reply: {reply_text}")
+                response = client.chat(
+                    model=MODEL_NAME,
+                    messages=[{"role": "user", "content": qwen_prompt, "images": [img_b64]}],
+                    format="json",
+                    options={"num_ctx": 4096}
+                )
+                reply_text = response.message.content or ""
+                move_data = parse_json_reply(reply_text)
+
+            if not move_data or not move_data.get("source") or not move_data.get("destination"):
                 print(f"Qwen didn't return valid JSON. Raw reply: {reply_text}")
                 return {"error": "Failed to parse source, destination and position from Qwen."}
+
+            src_obj = str(move_data["source"]).strip()
+            dst_obj = str(move_data["destination"]).strip()
+            position = str(move_data.get("position", "center")).strip().lower()
+            if position not in ("top", "bottom", "left", "right", "center"):
+                position = "center"
 
             print(f"Qwen identified MOVE -> Source: '{src_obj}', Destination: '{dst_obj}', Position: '{position}'")
 
@@ -265,6 +276,24 @@ def generate(payload):
         if payload.get("intent") == "edit":
             return {"objects": [], "error": str(e)}
         return {"error": str(e)}
+
+def strip_thinking(text):
+    """Qwen3 may wrap its reasoning in <think>...</think> before the answer."""
+    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
+
+def parse_json_reply(text):
+    """First {...} object in a model reply, ignoring <think> blocks, ``` fences and extra prose."""
+    text = strip_thinking(text).replace("```json", "").replace("```", "")
+    start = text.find("{")
+    while start != -1:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(text[start:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        start = text.find("{", start + 1)
+    return None
 
 def encode_image_to_base64(path):
     with open(path, "rb") as f:
