@@ -254,6 +254,28 @@ Good to know:
 
 ---
 
+### Option: an OpenRouter model for the CLARA dialogue (faster, no GPU for Qwen)
+
+In the CLARA version (`~/multimodal-chatbot-clara`) the clarification dialogue can be answered by a
+vision model on OpenRouter instead of Qwen3-VL in Ollama. Florence-2 (finding the objects) and
+SAM/LaMa (moving them) still run on your PC. The choice is made when the Qwen API starts:
+
+| `CLARA_BACKEND` | Model of the dialogue |
+|---|---|
+| `ollama` (default) | `qwen3-vl:8b` in the local Ollama, as before |
+| `openrouter` | `CLARA_MODEL` on OpenRouter (default `google/gemini-3.8-flash`) |
+
+```bash
+# needs OPENAI_API_KEY with your OpenRouter key (export it in ~/.bashrc)
+CLARA_BACKEND=openrouter CLARA_MODEL=google/gemini-3.8-flash bash start_pillar_chatbot.sh
+```
+
+The `openai` Python package must be installed in the `qwen3` environment
+(`conda activate qwen3 && pip install openai`). The same variables work with `start_clara_services.sh` of the alignment experiment. The model must
+accept images (on openrouter.ai/models, filter by input modality "image"). The API terminal prints
+`CLARA dialogue backend: ...` at startup so you can check which one is used. With `openrouter`, the
+photos of the scene are sent to OpenRouter and the network must allow openrouter.ai.
+
 ## Common problems
 
 | Message | What to do |

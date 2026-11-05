@@ -23,6 +23,20 @@ fl_processor = AutoProcessor.from_pretrained(FLORENCE_ID, trust_remote_code=True
 client = Client(host="http://127.0.0.1:11434")
 MODEL_NAME = "qwen3-vl:8b" 
 
+
+# Model that answers the CLARA dialogue (clarify). It is chosen when the Qwen API starts:
+#   CLARA_BACKEND=ollama      (default) MODEL_NAME in the local Ollama server, as before
+#   CLARA_BACKEND=openrouter  a vision model on OpenRouter (CLARA_MODEL), with the key in OPENAI_API_KEY
+# Example:
+#   CLARA_BACKEND=openrouter CLARA_MODEL=google/gemini-3.8-flash bash start_clara_services.sh ...
+# Florence-2 (locate) and SAM/LaMa (inpaint) always run locally.
+CLARA_BACKEND = os.getenv("CLARA_BACKEND", "ollama").strip().lower()
+CLARA_MODEL = os.getenv("CLARA_MODEL", "google/gemini-3.8-flash")
+OPENROUTER_URL = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1")
+if CLARA_BACKEND not in ("ollama", "openrouter"):
+    raise ValueError(f"CLARA_BACKEND must be 'ollama' or 'openrouter', not '{CLARA_BACKEND}'")
+print(f"CLARA dialogue backend: {CLARA_BACKEND} ({CLARA_MODEL if CLARA_BACKEND == 'openrouter' else MODEL_NAME})")
+
 def get_florence_bbox(image, text_input):
     """Florence-2 converts text to pixel-perfect boxes with Memory Optimization"""
     task_prompt = "<OPEN_VOCABULARY_DETECTION>"
@@ -87,8 +101,41 @@ def image_paths(content):
 def is_text(content):
     return isinstance(content, str) and content and not image_paths(content)
 
+def image_data_url(b64):
+    """Data URL of a base64 image, with the MIME type read from its first bytes."""
+    for prefix, mime in (("iVBOR", "image/png"), ("/9j/", "image/jpeg"), ("UklGR", "image/webp"), ("R0lGOD", "image/gif")):
+        if b64.startswith(prefix):
+            return f"data:{mime};base64,{b64}"
+    return f"data:image/jpeg;base64,{b64}"
+
+def openrouter_chat(messages, payload):
+    """Same dialogue as client.chat (Ollama), sent to a vision model on OpenRouter.
+
+    The messages use the Ollama format ({"role", "content", "images": [base64]}) and are
+    converted to the OpenAI format (content = list of text and image_url parts)."""
+    from openai import OpenAI  # only needed with CLARA_BACKEND=openrouter
+
+    converted = []
+    for m in messages:
+        if m.get("images"):
+            content = [{"type": "text", "text": m["content"]}] if m["content"] else []
+            content += [{"type": "image_url", "image_url": {"url": image_data_url(b)}} for b in m["images"]]
+        else:
+            content = m["content"]
+        converted.append({"role": m["role"], "content": content})
+
+    openrouter = OpenAI(base_url=OPENROUTER_URL, api_key=os.getenv("OPENAI_API_KEY"))
+    response = openrouter.chat.completions.create(
+        model=CLARA_MODEL,
+        messages=converted,
+        temperature=float(payload.get("temperature", 0.7)),
+        top_p=float(payload.get("top_p", 0.9)),
+        max_tokens=int(payload.get("max_new_tokens", 1024)),
+    )
+    return response.choices[0].message.content or ""
+
 def clarify(payload):
-    """One turn of the CLARA dialogue: system prompt + full history -> Qwen3-VL."""
+    """One turn of the CLARA dialogue: system prompt + full history -> Qwen3-VL (Ollama) or OpenRouter."""
     message = payload["message"]
     history = payload.get("history", [])
     sys_prompt = payload.get("sys_prompt", "")
@@ -126,18 +173,21 @@ def clarify(payload):
         add(role, content if is_text(content) else "", [encode_image_to_base64(p) for p in image_paths(content)])
     add("user", message.get("text", ""), [encode_image_to_base64(p) for p in message.get("files", [])])
 
-    response = client.chat(
-        model=MODEL_NAME,
-        messages=messages,
-        think=False,
-        options={
-            "num_ctx": 8192,
-            "temperature": float(payload.get("temperature", 0.7)),
-            "top_p": float(payload.get("top_p", 0.9)),
-            "num_predict": int(payload.get("max_new_tokens", 1024)),
-        },
-    )
-    reply = response.message.content or ""
+    if CLARA_BACKEND == "openrouter":
+        reply = openrouter_chat(messages, payload)
+    else:
+        response = client.chat(
+            model=MODEL_NAME,
+            messages=messages,
+            think=False,
+            options={
+                "num_ctx": 8192,
+                "temperature": float(payload.get("temperature", 0.7)),
+                "top_p": float(payload.get("top_p", 0.9)),
+                "num_predict": int(payload.get("max_new_tokens", 1024)),
+            },
+        )
+        reply = response.message.content or ""
     reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
     print(f"CLARA reply: {reply}")
     return {"response": reply}
