@@ -1,0 +1,650 @@
+diff --git a/Inpaint-Anything/lama/saicinpainting/training/trainers/__init__.py b/Inpaint-Anything/lama/saicinpainting/training/trainers/__init__.py
+index c59241f..5f604f4 100644
+--- a/Inpaint-Anything/lama/saicinpainting/training/trainers/__init__.py
++++ b/Inpaint-Anything/lama/saicinpainting/training/trainers/__init__.py
+@@ -24,7 +24,7 @@ def make_training_model(config):
+ 
+ def load_checkpoint(train_config, path, map_location='cuda', strict=True):
+     model: torch.nn.Module = make_training_model(train_config)
+-    state = torch.load(path, map_location=map_location)
++    state = torch.load(path, map_location=map_location, weights_only=False)
+     model.load_state_dict(state['state_dict'], strict=strict)
+     model.on_load_checkpoint(state)
+     return model
+diff --git a/core/src/multimodal_chatbot_ui.py b/core/src/multimodal_chatbot_ui.py
+index f7d9e90..5f38414 100644
+--- a/core/src/multimodal_chatbot_ui.py
++++ b/core/src/multimodal_chatbot_ui.py
+@@ -1,190 +1,301 @@
+ import os
+-import time
++import re
++import ast
++import json
+ import requests
+ import gradio as gr
+-import json
+-from lib import save_history, get_image_sequence
++import threading 
++import time
++import shutil
++import subprocess
++
++
+ 
+ # --- CONFIGURATION ---
+ QWEN_API_URL = "http://127.0.0.1:5555/api/relations"
+ INPAINT_API_URL = "http://127.0.0.1:4444/api/image-gen"
+ 
++# CLARA purpose-clarification prompt (from the original CLARA, aipapadim/CLARA).
++# {phrase} is replaced with the user's first request of the conversation.
++# CLARA_PROMPT = """You are an AI assistant and you must follow the instructions with discipline.
++# You are provided with an image depicting the scene and a phrase, `{phrase}`, describing the
++# desired state in abstraction. So, you must decompose this phrase and your primary task is to
++# clarify the user's intent regarding `{phrase}` through structured dialogue. Each of your question
++# is based on the previous answer.
++#     When decomposing `{phrase}`, focus on understanding the following that is related with the desired state:
++#         1. You must clarify the new position of the carriable objects to the desired state
++#         2. You must clarify which container should contain which objects in the desired state
++#         3. You do not care about how the objects to placed inside some container and do not mention that in the dialogue
++#         4. Your language should be sharp and humble
++#         5. After gathering all necessary details and confirming there is nothing more to add, provide a clear and concise description of the new image, but not by exposing the changes from the previous image
++#         6. The questions should be provided one at a time
++#         7. Generate a detailed task description in text format based on the last image.
++#         8.You should not care about the room, only the objects you see. Also, you are connected with a image generation module and you can call the module when you think you have collected
++#     enough information for the desired state, just produce the phrase 'image-gen' to give the signal and in the same response provide to the user a json string for the relations of the containers and objects such as:
++#         image-gen, result = {{"name of container A": ["name of object type A"], "name of container B": ["name of object type B", "name of object type C"]}}.
++#         Always, you should focus on the last image of the dialogue. When you produce the 'image-gen' token you should produce also a text response based on the last image.
++#         Always give the final answer such as:
++#         Task description: it has to be what the user wants the robot to do in simple but specific words.
++#         image-gen, result = {{"name of container A": ["name of object type A"], "name of container B": ["name of object type B", "name of object type C"]}}.
++#         DO NOT ADD ANY MORE TEXT OR INFORMATION ONLY THE description text and image-gen, result."""
++
++CLARA_PROMPT = """You are an AI assistant and you must follow the instructions with discipline.
++You are provided with an image depicting the scene and a phrase, `{phrase}`, describing the
++desired state in abstraction. So, you must decompose this phrase and your primary task is to
++clarify the user's intent regarding `{phrase}` through structured dialogue. Each of your question
++is based on the previous answer.
++    When decomposing `{phrase}`, focus on understanding the following that is related with the desired state:
++        1. You must clarify the new position of the carriable objects to the desired state
++        2. You must clarify which container should contain which objects in the desired state
++        3. You do not care about how the objects to placed inside some container and do not mention that in the dialogue
++        4. Your language should be sharp and humble
++        5. After gathering all necessary details and confirming there is nothing more to add, give the final description of the desired state
++        6. The questions should be provided one at a time
++        7. The final description must be a text that describes the final condition. Do NOT describe the image, the view, the table, the room, materials, textures or how the objects stand. Try to describe where each objects will end up.
++        8.You should not care about the room, only the objects you see. Also, you are connected with a image generation module and you can call the module when you think you have collected
++    enough information for the desired state, just produce the phrase 'image-gen' to give the signal and in the same response provide to the user a json string for the relations of the containers and objects such as:
++        image-gen, result = {{"name of container A": ["name of object type A"], "name of container B": ["name of object type B", "name of object type C"]}}.
++        Always, you should focus on the last image of the dialogue.
++        Always give the final answer such as:
++        Final description: <the point 7>
++        image-gen, result = {{"name of container A": ["name of object type A"], "name of container B": ["name of object type B", "name of object type C"]}}.
++        DO NOT ADD ANY MORE TEXT OR INFORMATION ONLY THE final description and image-gen, result."""
++IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
++
+ # ----------------------------------------------------------------------------
+ # API CALLS
+ # ----------------------------------------------------------------------------
+ 
+ def qwen_call(payload):
+-    
+-    res = requests.post(QWEN_API_URL, json=payload)
++    res = requests.post(QWEN_API_URL, json=payload, timeout=1200)
+     res.raise_for_status()
+     return res.json()
+ 
+ def inpaint_call(payload):
+-    
+-    res = requests.post(INPAINT_API_URL, json=payload)
++    res = requests.post(INPAINT_API_URL, json=payload, timeout=1200)
+     res.raise_for_status()
+     return res.json()
+ 
+ # ----------------------------------------------------------------------------
+-# MAIN LOGIC
++# HELPERS
+ # ----------------------------------------------------------------------------
+ 
+-def answer(message, history, history_file, max_new_tokens, temperature, top_p, sys_prompt):
+-
+-    image_sequence = get_image_sequence(history, message)
+-    if not image_sequence:
+-        yield "Please upload an image!"
+-        return
+-        
+-    image_path = image_sequence[-1] 
+-    
+-    
+-    user_text = message.get('text', '')
+-    user_text_lower = user_text.lower()
+-
+-    
+-    edit_keywords = ['remove', 'delete', 'erase', 'svise', 'vgale', 'clean', 'αφαίρεσε', 'σβήσε']
+-    move_keywords = ['move', 'place', 'put', 'μετάφερε', 'μετακίνησε', 'βάλε', 'πήγαινε']
+-    
+-    # ==========================================
+-    # MODE 1: EDIT
+-    # ==========================================
+-    if any(kw in user_text_lower for kw in edit_keywords):
+-        yield "Object Detection..."
+-        
+-        qwen_payload = {
+-            "message": message,
+-            "intent": "edit"
+-        }
++def image_paths(content):
++    """Image file paths inside one Gradio history entry (tuple, list, dict or str)."""
++    if isinstance(content, str):
++        return [content] if content.lower().endswith(IMAGE_EXTS) and os.path.isfile(content) else []
++    if isinstance(content, (tuple, list)):
++        return [p for item in content for p in image_paths(item)]
++    if hasattr(content, "value") and not isinstance(content, dict):  # Gradio component
++        return image_paths(content.value)
++    if isinstance(content, dict):
++        for key in ("path", "file", "value"):
++            if key in content:
++                return image_paths(content[key])
++    return []
+ 
+-        try:
+-            qwen_res = qwen_call(qwen_payload)
+-            bboxes = [obj['bbox'] for obj in qwen_res.get('objects', [])]
+-            
+-            if not bboxes:
+-                yield "Did not find the object. Describe it again."
+-                return
+-
+-            yield f"Object detected. Continue with editing..."
+-            
+-            inpaint_res = inpaint_call({"intent": "edit", "image_path": image_path, "bboxes": bboxes})
+-            result_path = inpaint_res.get("response")
+-
+-            yield f"Object Removed."
+-            yield gr.Image(result_path)
+-            return 
+-            
+-        except Exception as e:
+-            yield f"Error during processing: {str(e)}"
+-            return
++def clean_history(history):
++    """Keep only role + text/image paths, so the history can be sent as JSON."""
++    cleaned = []
++    for entry in history:
++        content = entry.get("content")
++        paths = image_paths(content)
++        if paths:
++            cleaned.append({"role": entry.get("role"), "content": paths})
++        elif isinstance(content, str) and content:
++            cleaned.append({"role": entry.get("role"), "content": content})
++    return cleaned
+ 
+-    # ==========================================
+-    # MODE 2: MOVE 
+-    # ==========================================
+-    elif any(kw in user_text_lower for kw in move_keywords):
+-        yield "Location analysis"
+-        
+-        qwen_payload = {
+-            "message": message,
+-            "intent": "move"
+-        }
++def parse_image_gen(text):
++    """Detect the 'image-gen, result = {...}' signal (same format as the original CLARA).
+ 
++    Returns (found, relations, text_without_signal)."""
++    found = "image-gen" in text
++    relations = None
++    match = re.search(r",?\s*[rR]esult\s*[=:]\s*(\{[^{}]+\})", text)
++    if match:
+         try:
+-            qwen_res = qwen_call(qwen_payload)
+-            
+-            if "error" in qwen_res:
+-                yield f"Error: {qwen_res['error']}"
+-                return
+-
+-            source = qwen_res.get("source")
+-            destination = qwen_res.get("destination")
+-            position = qwen_res.get("position", "center") 
+-            
+-            if not source or not destination:
+-                yield "Which object to reposition and where"
+-                return
+-
+-            yield f"Reposition: {source['name']} --> {position} of {destination['name']}..."
+-            
+-            
+-            inpaint_payload = {
+-                "intent": "move",
+-                "image_path": image_path,
+-                "source_bbox": source["bbox"],
+-                "dest_bbox": destination["bbox"],
+-                "position": position 
+-            }
+-            
+-            inpaint_res = inpaint_call(inpaint_payload)
+-            result_path = inpaint_res.get("response")
+-
+-            yield f"Ready"
+-            yield gr.Image(result_path)
++            parsed = ast.literal_eval(match.group(1))
++            relations = {str(k).strip(): [str(v).strip() for v in (vals if isinstance(vals, list) else [vals])]
++                         for k, vals in parsed.items()}
++            text = text.replace(match.group(0), "")
++        except (SyntaxError, ValueError):
++            relations = None
++    text = text.replace("image-gen", "").replace("```json", "").replace("```", "").strip(" ,\n")
++    return found, relations, text
++
++def save_history(history, filename):
++    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", filename)
++    os.makedirs(os.path.dirname(path), exist_ok=True)
++    with open(path, "w") as f:
++        json.dump(history, f, indent=2)
++
++def arrange(image_path, relations, log):
++    """Move every object into its container, one move at a time, on the same image."""
++    current = image_path
++    for container, objects in relations.items():
++        for obj in objects:
++            boxes = qwen_call({"intent": "locate", "image_path": current, "names": [obj, container]}).get("bboxes", {})
++            if not boxes.get(obj):
++                log.append(f"- Could not find **{obj}**, skipped.")
++                continue
++            if not boxes.get(container):
++                log.append(f"- Could not find **{container}**, skipped {obj}.")
++                continue
++            res = inpaint_call({"intent": "move", "image_path": current, "source_bbox": boxes[obj],
++                                "dest_bbox": boxes[container], "position": "center"})
++            if res.get("status") != "success":
++                log.append(f"- Moving {obj} failed: {res.get('message')}")
++                continue
++            current = res["response"]
++            log.append(f"- {obj} → {container}")
++    return current if current != image_path else None
++
++# ----------------------------------------------------------------------------
++# MAIN LOGIC
++# ----------------------------------------------------------------------------
++class ClaraSession:
++    """Una conversación de CLARA. Al generar la imagen guarda el resultado y avisa de que terminó."""
++
++    def __init__(self):
++        self.final_purpose = None   # descripción final de la tarea
++        self.image_path = None      # imagen generada
++        self.done = threading.Event()
++
++    def answer(self, message, history, history_file, max_new_tokens, temperature, top_p, sys_prompt):
++        images = [p for e in history for p in image_paths(e.get("content"))] + list(message.get("files", []))
++        if not images:
++            yield "Please upload an image of the scene!"
+             return
+-            
++        image_path = images[-1]  # always work on the last image of the dialogue
++
++        yield "Thinking..."
++        try:
++            reply = qwen_call({
++                "intent": "clarify",
++                "message": message,
++                "history": clean_history(history),
++                "sys_prompt": sys_prompt,
++                "max_new_tokens": max_new_tokens,
++                "temperature": temperature,
++                "top_p": top_p,
++            }).get("response", "")
+         except Exception as e:
+-            yield f"Error during repositioning: {str(e)}"
++            yield f"Error API: {str(e)}"
+             return
+ 
+-    # ==========================================
+-    # MODE 3: CHAT
+-    # ==========================================
+-    yield "Thinking..."
+-    payload = {
+-        "message": message,
+-        "intent": "chat"
+-    }
++        found, relations, text = parse_image_gen(reply)
++        text = text or "(Qwen returned an empty reply — check the qwen3_api terminal.)"
++        outputs = [{"role": "assistant", "content": text}]
++        result_path = None
+ 
+-    try:
+-        response_json = qwen_call(payload)
+-        reply = response_json.get("response", str(response_json))
+-        
+-        buffer = ""
+-        for char in reply:
+-            buffer += char
+-            yield buffer
+-            time.sleep(0.005)
+-            
+-    except Exception as e:
+-        yield f"Error API: {str(e)}"
++        if found and relations:
++            yield text + "\n\nArranging the scene..."
++            log = []
++            try:
++                result_path = arrange(image_path, relations, log)
++            except Exception as e:
++                log.append(f"- Error: {str(e)}")
++            print("\n".join(log))  # details go to the terminal, not the chat
++            if result_path:
++                # Same as the original CLARA: image first, then the description
++                outputs.insert(0, {"role": "assistant", "content": (result_path,)})
++            else:
++                outputs[0]["content"] = text + "\n\n" + "\n".join(log)  # show the log only when it failed
++        elif found:
++            outputs[0]["content"] = text + "\n\n(The model asked for image generation but gave no valid result dictionary.)"
+ 
++        yield outputs
++
++        try:
++            saved = clean_history(history)
++            if message.get("files"):
++                saved.append({"role": "user", "content": list(message["files"])})
++            saved.append({"role": "user", "content": message.get("text", "")})
++            saved.append({"role": "assistant", "content": reply})
++            save_history(saved, history_file)
++        except Exception as e:
++            print(f"Could not save history: {e}")
++
++        # Fin de CLARA: guardar el resultado y avisar para cerrar la interfaz
++        if result_path:
++            self.final_purpose = text
++            self.image_path = result_path
++            self.done.set()
+ 
+ # ----------------------------------------------------------------------------
+ # INTERFACE
+ # ----------------------------------------------------------------------------
+ 
+-demo = gr.ChatInterface(
+-    fn=answer,
+-    title="Pillar Multimodal Assistant",
+-    type="messages",
+-    additional_inputs=[
+-        gr.Textbox(label="History file", value="history/chat_log.json"),
+-        gr.Slider(16, 1024, 512, label="Tokens"),
+-        gr.Slider(0.1, 2.0, 0.7, label="Temperature"),
+-        gr.Slider(0.1, 1.0, 0.9, label="Top-P"),
+-        gr.Textbox(
+-            label="System Prompt",
+-            value="You are an Image Editor. Detect objects in [ymin, xmin, ymax, xmax] format (0-1000)."
+-        ),
+-
++def build_ui(session):
++    return gr.ChatInterface(
++        fn=session.answer,
++        title="CLARA (Qwen3-VL)",
++        type="messages",
++        additional_inputs=[
++            gr.Textbox(label="History file", value="history/chat_log.json"),
++            gr.Slider(16, 8192, 4096, step=16, label="Tokens"),
++            gr.Slider(0.1, 2.0, 0.7, label="Temperature"),
++            gr.Slider(0.1, 1.0, 0.9, label="Top-P"),
++            gr.Textbox(label="System Prompt", value=CLARA_PROMPT, lines=8),
+         ],
+-            multimodal=True,
+-            textbox=gr.MultimodalTextbox(file_types=["image"]),
+-            fill_height=True,
+-        )
++        multimodal=True,
++        textbox=gr.MultimodalTextbox(file_types=["image"]),
++        fill_height=True,
++    )
+ 
+ # Υπολογίζει δυναμικά την απόλυτη διαδρομή για τον φάκελο outputs
+ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+ OUTPUTS_DIR = os.path.join(PROJECT_ROOT, "Inpaint-Anything", "outputs")
+ 
+-if __name__ == "__main__":
++def open_app_window(url):
++    """Abre la interfaz en su propia ventana de navegador, que luego Python puede cerrar."""
++    # Perfil propio: así la ventana es un proceso independiente de tu navegador normal.
++    # Va dentro del proyecto (no en /tmp) porque Chromium/Firefox instalados con snap no ven /tmp.
++    profile = os.path.join(PROJECT_ROOT, "browser_profile")
++    os.makedirs(profile, exist_ok=True)
++
++    for name in ("google-chrome", "chromium", "chromium-browser"):
++        exe = shutil.which(name)
++        if exe:
++            return subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={profile}",
++                                     "--no-first-run", "--no-default-browser-check",
++                                     "--window-size=1200,900"])
++    exe = shutil.which("firefox")
++    if exe:
++        return subprocess.Popen([exe, "--new-instance", "--profile", profile, url])
++
++    print(f"No se encontró Chrome/Chromium/Firefox. Abre {url} a mano.")
++    return None
++
++
++def run_clara(show_seconds=5):
++    """Abre CLARA en su propia ventana, espera a que genere la imagen final,
++    cierra la ventana y la interfaz, y devuelve la sesión con final_purpose e image_path."""
++    session = ClaraSession()
++    demo = build_ui(session)
+     demo.launch(
+-        server_name="0.0.0.0",
++        server_name="127.0.0.1",
+         server_port=7861,
+-        share=True,
+-        debug=True,
+-        allowed_paths=[OUTPUTS_DIR]
++        allowed_paths=[OUTPUTS_DIR],
++        prevent_thread_lock=True,
+     )
++    browser = open_app_window("http://127.0.0.1:7861")
++    try:
++        while not session.done.wait(0.5):
++            if browser and browser.poll() is not None:   # el usuario cerró la ventana a mano
++                print("Ventana cerrada antes de terminar CLARA.")
++                break
++        else:
++            time.sleep(show_seconds)                     # deja ver el resultado antes de cerrar
++    finally:
++        if browser and browser.poll() is None:
++            browser.terminate()                          # cierra la ventana
++        demo.close()                                     # cierra el servidor
++    return session
+ 
+ 
+-
++if __name__ == "__main__":
++    session = run_clara()
++    print("final_purpose:", session.final_purpose)
++    print("image_path:", session.image_path)
+diff --git a/qwen3_api/ai_engine.py b/qwen3_api/ai_engine.py
+index 6790151..caf4f7c 100644
+--- a/qwen3_api/ai_engine.py
++++ b/qwen3_api/ai_engine.py
+@@ -1,5 +1,6 @@
+ import base64
+ import json
++import os
+ import re
+ import torch
+ from ollama import Client
+@@ -22,6 +23,20 @@ fl_processor = AutoProcessor.from_pretrained(FLORENCE_ID, trust_remote_code=True
+ client = Client(host="http://127.0.0.1:11434")
+ MODEL_NAME = "qwen3-vl:8b" 
+ 
++
++# Model that answers the CLARA dialogue (clarify). It is chosen when the Qwen API starts:
++#   CLARA_BACKEND=ollama      (default) MODEL_NAME in the local Ollama server, as before
++#   CLARA_BACKEND=openrouter  a vision model on OpenRouter (CLARA_MODEL), with the key in OPENAI_API_KEY
++# Example:
++#   CLARA_BACKEND=openrouter CLARA_MODEL=google/gemini-3.8-flash bash start_clara_services.sh ...
++# Florence-2 (locate) and SAM/LaMa (inpaint) always run locally.
++CLARA_BACKEND = os.getenv("CLARA_BACKEND", "ollama").strip().lower()
++CLARA_MODEL = os.getenv("CLARA_MODEL", "google/gemini-3.8-flash")
++OPENROUTER_URL = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1")
++if CLARA_BACKEND not in ("ollama", "openrouter"):
++    raise ValueError(f"CLARA_BACKEND must be 'ollama' or 'openrouter', not '{CLARA_BACKEND}'")
++print(f"CLARA dialogue backend: {CLARA_BACKEND} ({CLARA_MODEL if CLARA_BACKEND == 'openrouter' else MODEL_NAME})")
++
+ def get_florence_bbox(image, text_input):
+     """Florence-2 converts text to pixel-perfect boxes with Memory Optimization"""
+     task_prompt = "<OPEN_VOCABULARY_DETECTION>"
+@@ -66,11 +81,132 @@ def get_florence_bbox(image, text_input):
+     xmax = (box[2] / eval_img.width) * 1000
+     return [ymin, xmin, ymax, xmax]
+ 
++# ==========================================
++# CLARA: purpose clarification dialogue
++# ==========================================
++IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
++
++def image_paths(content):
++    """Image file paths inside one Gradio history entry (tuple, list, dict or str)."""
++    if isinstance(content, str):
++        return [content] if content.lower().endswith(IMAGE_EXTS) and os.path.isfile(content) else []
++    if isinstance(content, (tuple, list)):
++        return [p for item in content for p in image_paths(item)]
++    if isinstance(content, dict):
++        for key in ("path", "file", "value"):
++            if key in content:
++                return image_paths(content[key])
++    return []
++
++def is_text(content):
++    return isinstance(content, str) and content and not image_paths(content)
++
++def image_data_url(b64):
++    """Data URL of a base64 image, with the MIME type read from its first bytes."""
++    for prefix, mime in (("iVBOR", "image/png"), ("/9j/", "image/jpeg"), ("UklGR", "image/webp"), ("R0lGOD", "image/gif")):
++        if b64.startswith(prefix):
++            return f"data:{mime};base64,{b64}"
++    return f"data:image/jpeg;base64,{b64}"
++
++def openrouter_chat(messages, payload):
++    """Same dialogue as client.chat (Ollama), sent to a vision model on OpenRouter.
++
++    The messages use the Ollama format ({"role", "content", "images": [base64]}) and are
++    converted to the OpenAI format (content = list of text and image_url parts)."""
++    from openai import OpenAI  # only needed with CLARA_BACKEND=openrouter
++
++    converted = []
++    for m in messages:
++        if m.get("images"):
++            content = [{"type": "text", "text": m["content"]}] if m["content"] else []
++            content += [{"type": "image_url", "image_url": {"url": image_data_url(b)}} for b in m["images"]]
++        else:
++            content = m["content"]
++        converted.append({"role": m["role"], "content": content})
++
++    openrouter = OpenAI(base_url=OPENROUTER_URL, api_key=os.getenv("OPENAI_API_KEY"))
++    response = openrouter.chat.completions.create(
++        model=CLARA_MODEL,
++        messages=converted,
++        temperature=float(payload.get("temperature", 0.7)),
++        top_p=float(payload.get("top_p", 0.9)),
++        max_tokens=int(payload.get("max_new_tokens", 1024)),
++    )
++    return response.choices[0].message.content or ""
++
++def clarify(payload):
++    """One turn of the CLARA dialogue: system prompt + full history -> Qwen3-VL (Ollama) or OpenRouter."""
++    message = payload["message"]
++    history = payload.get("history", [])
++    sys_prompt = payload.get("sys_prompt", "")
++
++    # {phrase} = the user's first request in the conversation (as in the original CLARA)
++    phrase = next((e["content"] for e in history if e.get("role") == "user" and is_text(e.get("content"))),
++                  message.get("text", ""))
++    sys_prompt = sys_prompt.replace("{phrase}", phrase).replace("{{", "{").replace("}}", "}")
++
++    messages = [{"role": "system", "content": sys_prompt}]
++    pending_images = []  # images waiting to be attached to the next user turn
++
++    def add(role, text, images):
++        if role == "user":
++            images = pending_images + images
++            pending_images.clear()
++        elif images:  # Ollama only accepts images on user turns
++            pending_images.extend(images)
++            images = []
++        if not text and not images:
++            return
++        last = messages[-1]
++        if last["role"] == role and role != "system":
++            last["content"] = (last["content"] + "\n" + text).strip()
++            last.setdefault("images", []).extend(images)
++        else:
++            entry = {"role": role, "content": text}
++            if images:
++                entry["images"] = images
++            messages.append(entry)
++
++    for entry in history:
++        content = entry.get("content")
++        role = entry.get("role", "user")
++        add(role, content if is_text(content) else "", [encode_image_to_base64(p) for p in image_paths(content)])
++    add("user", message.get("text", ""), [encode_image_to_base64(p) for p in message.get("files", [])])
++
++    if CLARA_BACKEND == "openrouter":
++        reply = openrouter_chat(messages, payload)
++    else:
++        response = client.chat(
++            model=MODEL_NAME,
++            messages=messages,
++            think=False,
++            options={
++                "num_ctx": 8192,
++                "temperature": float(payload.get("temperature", 0.7)),
++                "top_p": float(payload.get("top_p", 0.9)),
++                "num_predict": int(payload.get("max_new_tokens", 1024)),
++            },
++        )
++        reply = response.message.content or ""
++    reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
++    print(f"CLARA reply: {reply}")
++    return {"response": reply}
++
++def locate(payload):
++    """Florence-2 boxes for a list of object names in one image."""
++    raw_img = Image.open(payload["image_path"]).convert("RGB")
++    return {"bboxes": {name: get_florence_bbox(raw_img, name) for name in payload.get("names", [])}}
++
+ def generate(payload):
+     try:
+-        
++
+         intent = payload.get("intent", "chat")
+-        
++
++        if intent == "clarify":
++            return clarify(payload)
++        if intent == "locate":
++            return locate(payload)
++
+         text = payload["message"].get("text", "")
+         files = payload["message"].get("files", [])
+ 
+diff --git a/start_pillar_chatbot.sh b/start_pillar_chatbot.sh
+index 6c19dd0..166b906 100644
+--- a/start_pillar_chatbot.sh
++++ b/start_pillar_chatbot.sh
+@@ -51,8 +51,17 @@ start_module "$PROJECT_ROOT/Inpaint-Anything" "app.py" "inpaint-anything" "Inpai
+ sleep 5 
+ 
+ # 3. Gradio UI (Orchestrator) -> Port 7861 (χρησιμοποιεί το qwen3 conda env)
+-start_module "$PROJECT_ROOT/core/src" "multimodal_chatbot_ui.py" "qwen3" "Gradio UI"
++start_module "$PROJECT_ROOT/core/src" "TEST.py" "qwen3" "Gradio UI"
+ sleep 5 
+ 
+ echo "All SOTA modules are up and running!"
+ wait
++
++cleanup() {
++    echo "Stopping services..."
++    kill "${PIDS[@]}" 2>/dev/null
++    sleep 3
++    kill -9 "${PIDS[@]}" 2>/dev/null
++    echo "Done."
++}
++trap cleanup EXIT
